@@ -305,6 +305,14 @@ class BucketManager:
                 f.write(frontmatter.dumps(post))
             self._move_bucket(file_path, self.permanent_dir, domain)
 
+        # --- Auto-move: unpin → dynamic/ ---
+        # --- 自动移动：取消钉选 → dynamic/ ---
+        if "pinned" in kwargs and not kwargs["pinned"] and post.get("type") == "permanent":
+            post["type"] = "dynamic"
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(frontmatter.dumps(post))
+            self._move_bucket(file_path, self.dynamic_dir, domain)
+
         logger.info(f"Updated bucket / 更新记忆桶: {bucket_id}")
         return True
 
