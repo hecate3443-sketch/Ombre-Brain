@@ -401,6 +401,55 @@ class Dehydrator:
         return f"{header}{content}"
 
     # ---------------------------------------------------------
+    # Robust JSON extraction: extracts JSON array/object from
+    # LLM responses that may contain markdown code blocks,
+    # preamble text, or other formatting quirks.
+    # 鲁棒 JSON 提取：从 LLM 返回中提取 JSON 数组/对象，
+    # 容忍 markdown 代码块、导语等格式偏差。
+    # ---------------------------------------------------------
+    def _extract_json(self, raw: str) -> str:
+        """
+        Extract JSON string from raw LLM response, handling:
+        - Markdown code blocks (```json ... ```)
+        - Preamble text before/after the JSON
+        - Missing language tags on code blocks
+        从 LLM 原始返回中提取 JSON，兼容各种格式偏差。
+        """
+        text = raw.strip()
+
+        # --- Strip markdown code block markers ---
+        # --- 剥离 markdown 代码块标记 ---
+        if text.startswith("```"):
+            # Remove opening ``` (and optional language tag like "json")
+            parts = text.split("\n", 1)
+            if len(parts) > 1:
+                text = parts[1]
+            else:
+                text = text[3:]
+        if "```" in text:
+            text = text.rsplit("```", 1)[0]
+
+        text = text.strip()
+
+        # --- Find JSON boundaries: first [/{ and last ]/} ---
+        # --- 找 JSON 边界：第一个 [ 或 { 和最后一个 ] 或 } ---
+        start = -1
+        end = -1
+        for i, ch in enumerate(text):
+            if ch in ('[', '{'):
+                start = i
+                break
+        for i in range(len(text) - 1, -1, -1):
+            if text[i] in (']', '}'):
+                end = i
+                break
+
+        if start >= 0 and end > start:
+            return text[start:end + 1]
+
+        return text
+
+    # ---------------------------------------------------------
     # Auto-tagging: analyze content for domain + emotion + tags
     # 自动打标：分析内容，输出主题域 + 情感坐标 + 标签
     # Called by server.py when storing new memories
@@ -465,14 +514,10 @@ class Dehydrator:
         解析并校验 API 返回的打标结果。
         """
         try:
-            # Handle potential markdown code block wrapping
-            # 处理可能的 markdown 代码块包裹
-            cleaned = raw.strip()
-            if cleaned.startswith("```"):
-                cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0]
+            cleaned = self._extract_json(raw)
             result = json.loads(cleaned)
         except (json.JSONDecodeError, IndexError, ValueError):
-            logger.warning(f"API tagging JSON parse failed / JSON 解析失败: {raw[:200]}")
+            logger.warning(f"API tagging JSON parse failed / JSON 解析失败: {raw[:500]}")
             return self._default_analysis()
 
         if not isinstance(result, dict):
@@ -574,12 +619,10 @@ class Dehydrator:
         解析并校验 API 返回的日记整理结果。
         """
         try:
-            cleaned = raw.strip()
-            if cleaned.startswith("```"):
-                cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0]
+            cleaned = self._extract_json(raw)
             items = json.loads(cleaned)
         except (json.JSONDecodeError, IndexError, ValueError):
-            logger.warning(f"Diary digest JSON parse failed / JSON 解析失败: {raw[:200]}")
+            logger.warning(f"Diary digest JSON parse failed / JSON 解析失败: {raw[:500]}")
             return []
 
         if not isinstance(items, list):
