@@ -1273,8 +1273,8 @@ async def dream() -> str:
 # 读取最近 3 天的桶元数据，格式化为三个板块。
 # =============================================================
 @mcp.tool()
-async def dawn() -> str:
-    """黎明——返回最近三天的近端上下文：关键事件、情绪基调、待办挂账。新对话开始时调用，帮你接上昨天。"""
+async def dawn(full: bool = False) -> str:
+    """黎明——返回最近三天的近端上下文：关键事件、情绪基调、待办挂账。full=True 时返回完整内容片段（供后台策展用）。"""
     await decay_engine.ensure_started()
 
     try:
@@ -1339,16 +1339,18 @@ async def dawn() -> str:
             created_date = meta.get("created", "")[:10]
             resolved = " ✓" if meta.get("resolved") else ""
 
-            # --- Extract content snippet (first ~80 chars, break at sentence end) ---
+            # --- Extract content snippet (length depends on mode) ---
+            max_chars = 500 if full else 80
+            min_break = max_chars // 2  # at least half before allowing sentence break
             raw_content = b.get("content", "")
-            snippet = strip_wikilinks(raw_content)[:80].replace("\n", " ").strip()
-            # Try to break at last natural sentence boundary (at least 40 chars in)
+            snippet = strip_wikilinks(raw_content)[:max_chars].replace("\n", " ").strip()
+            # Try to break at last natural sentence boundary
             for sep in ("。", "！", "？"):
                 last = snippet.rfind(sep)
-                if last >= 40:
+                if last >= min_break:
                     snippet = snippet[:last + 1]
                     break
-            truncated = " …" if len(raw_content) > len(snippet) else ""
+            truncated = " …" if len(strip_wikilinks(raw_content)) > len(snippet) else ""
 
             # Format: title line + snippet line
             title_line = f"• [{name}] 主题:{domains} | 重要度:{imp}{resolved} | {created_date}"
@@ -1357,7 +1359,8 @@ async def dawn() -> str:
             parts.append(title_line)
             if snippet:
                 parts.append(f"  「{snippet}{truncated}」")
-        parts.append("（以上内容为原文截取片段，非全文。想了解细节可用 breath 或 dream 查阅。）")
+        snippet_note = "（以上为原文较长截取片段。想了解完整细节可用 breath 或 dream 查阅。）" if full else "（以上内容为原文截取片段，非全文。想了解细节可用 breath 或 dream 查阅。）"
+        parts.append(snippet_note)
         parts.append("")
 
     # ============================================================
