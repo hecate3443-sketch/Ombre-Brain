@@ -1353,7 +1353,8 @@ async def dawn(full: bool = False) -> str:
             truncated = " …" if len(strip_wikilinks(raw_content)) > len(snippet) else ""
 
             # Format: title line + snippet line
-            title_line = f"• [{name}] 主题:{domains} | 重要度:{imp}{resolved} | {created_date}"
+            bid = b["id"]
+            title_line = f"• [{name}] 主题:{domains} | 重要度:{imp}{resolved} | {created_date} | ID:{bid}"
             if tags:
                 title_line += f" | {tags}"
             parts.append(title_line)
@@ -1426,7 +1427,8 @@ async def dawn(full: bool = False) -> str:
             created_date = meta.get("created", "")[:10]
             tags = "、".join(meta.get("tags", [])[:3])
 
-            line = f"• [{name}] 重要度:{imp} | {created_date}"
+            bid = b["id"]
+            line = f"• [{name}] 重要度:{imp} | {created_date} | ID:{bid}"
             if tags:
                 line += f" | {tags}"
             parts.append(line)
