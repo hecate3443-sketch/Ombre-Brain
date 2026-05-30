@@ -10,8 +10,8 @@
 # 核心职责：
 #   - Initialize config, bucket manager, dehydrator, decay engine
 #     初始化配置、记忆桶管理器、脱水器、衰减引擎
-#   - Expose 6 MCP tools:
-#     暴露 6 个 MCP 工具：
+#   - Expose 7 MCP tools:
+#     暴露 7 个 MCP 工具：
 #       breath — Surface unresolved memories or search by keyword
 #                浮现未解决记忆 或 按关键词检索
 #       hold   — Store a single memory (or write a `feel` reflection)
@@ -24,6 +24,8 @@
 #                系统状态 + 所有桶列表
 #       dream  — Surface recent dynamic buckets for self-digestion
 #                返回最近桶 供模型自省/写 feel
+#       dawn   — Warmup pack: key events + emotional baseline + pending todos
+#                预热包：关键事件 + 情绪基调 + 待办挂账
 #
 # Startup:
 # 启动方式：
@@ -43,6 +45,7 @@ import secrets
 import time
 import json as _json_lib
 import httpx
+from datetime import datetime, timedelta
 
 
 # --- Ensure same-directory modules can be imported ---
@@ -1257,6 +1260,162 @@ async def dream() -> str:
     final_text = header + "\n---\n".join(parts) + connection_hint + crystal_hint
     await _fire_webhook("dream", {"recent": len(recent), "chars": len(final_text)})
     return final_text
+
+
+# =============================================================
+# Tool 7: dawn — 黎明，新对话预热包
+# 工具 7：dawn — 黎明，返回最近三天的近端上下文
+#
+# Pure data extraction — no LLM, no dehydration, no judgment.
+# Reads bucket metadata from the last 3 days and formats into
+# three sections: recent events, emotional baseline, pending todos.
+# 纯数据提取——不走 LLM、不脱水、不做判断。
+# 读取最近 3 天的桶元数据，格式化为三个板块。
+# =============================================================
+@mcp.tool()
+async def dawn() -> str:
+    """黎明——返回最近三天的近端上下文：关键事件、情绪基调、待办挂账。新对话开始时调用，帮你接上昨天。"""
+    await decay_engine.ensure_started()
+
+    try:
+        all_buckets = await bucket_mgr.list_all(include_archive=False)
+    except Exception as e:
+        logger.error(f"Dawn failed to list buckets: {e}")
+        return "记忆系统暂时无法访问。"
+
+    now = datetime.now()
+    three_days_ago = now - timedelta(days=3)
+
+    # --- Filter buckets ---
+    recent = []       # dynamic buckets from last 3 days
+    older_todos = []  # unresolved todos older than 3 days
+
+    for b in all_buckets:
+        meta = b["metadata"]
+        btype = meta.get("type", "dynamic")
+
+        # Skip feel, permanent, pinned
+        if btype in ("feel", "permanent") or meta.get("pinned"):
+            continue
+
+        created_str = meta.get("created", "")
+        try:
+            created = datetime.fromisoformat(created_str)
+        except (ValueError, TypeError):
+            continue
+
+        if created >= three_days_ago:
+            recent.append(b)
+
+        # Collect unresolved todos outside 3-day window
+        if not meta.get("resolved") and btype == "dynamic":
+            domains = meta.get("domain", [])
+            if any(d in ("待办", "事务") for d in domains):
+                if created < three_days_ago:
+                    older_todos.append(b)
+
+    if not recent and not older_todos:
+        return "最近三天没有新的记忆，也没有挂账的待办。一段平静的日子。"
+
+    parts = []
+
+    # ============================================================
+    # Section 1: 最近事件 (importance >= 5, fallback top 5)
+    # ============================================================
+    events = [b for b in recent if b["metadata"].get("importance", 5) >= 5]
+    if not events and recent:
+        recent_sorted = sorted(recent, key=lambda b: b["metadata"].get("importance", 0), reverse=True)
+        events = recent_sorted[:5]
+
+    if events:
+        events.sort(key=lambda b: b["metadata"].get("created", ""), reverse=True)
+        parts.append("=== 最近事件 ===")
+        for b in events:
+            meta = b["metadata"]
+            name = meta.get("name", b["id"])
+            domains = "、".join(meta.get("domain", []))
+            tags = "、".join(meta.get("tags", [])[:5])
+            imp = meta.get("importance", 5)
+            created_date = meta.get("created", "")[:10]
+            resolved = " ✓" if meta.get("resolved") else ""
+
+            line = f"• [{name}] 主题:{domains} | 重要度:{imp}{resolved} | {created_date}"
+            if tags:
+                line += f" | {tags}"
+            parts.append(line)
+        parts.append("")
+
+    # ============================================================
+    # Section 2: 情绪基调
+    # ============================================================
+    if recent:
+        vals = [b["metadata"].get("valence", 0.5) for b in recent]
+        aros = [b["metadata"].get("arousal", 0.3) for b in recent]
+        avg_val = sum(vals) / len(vals) if vals else 0.5
+        avg_aro = sum(aros) / len(aros) if aros else 0.3
+
+        if avg_val >= 0.65:
+            tone = "积极"
+        elif avg_val >= 0.55:
+            tone = "中性偏积极"
+        elif avg_val >= 0.45:
+            tone = "中性"
+        elif avg_val >= 0.35:
+            tone = "中性偏低落"
+        else:
+            tone = "低落"
+
+        if avg_aro >= 0.6:
+            energy = "活跃"
+        elif avg_aro >= 0.35:
+            energy = "平稳"
+        else:
+            energy = "平静"
+
+        parts.append("=== 情绪基调 ===")
+        parts.append(f"近三日情绪：效价 {avg_val:.2f}（{tone}）/ 唤醒 {avg_aro:.2f}（{energy}）")
+
+        # Recently recorded emotions / inner world entries
+        emotion_buckets = [b for b in recent
+                          if any(d in ("情绪", "内心") for d in b["metadata"].get("domain", []))]
+        if emotion_buckets:
+            emotion_buckets.sort(key=lambda b: b["metadata"].get("created", ""), reverse=True)
+            for b in emotion_buckets[:3]:
+                meta = b["metadata"]
+                name = meta.get("name", b["id"])
+                val = meta.get("valence", 0.5)
+                aro = meta.get("arousal", 0.3)
+                parts.append(f"  [{name}] V{val:.1f}/A{aro:.1f}")
+        parts.append("")
+
+    # ============================================================
+    # Section 3: 待办挂账
+    # ============================================================
+    recent_todos = [b for b in recent
+                    if not b["metadata"].get("resolved")
+                    and any(d in ("待办", "事务") for d in b["metadata"].get("domain", []))]
+    all_pending = recent_todos + older_todos
+    all_pending.sort(key=lambda b: b["metadata"].get("created", ""), reverse=True)
+
+    if all_pending:
+        parts.append("=== 待办挂账 ===")
+        count_str = f"共 {len(all_pending)} 项" if len(all_pending) > 1 else "1 项"
+        parts.append(f"{count_str}未解决：")
+        for b in all_pending[:10]:
+            meta = b["metadata"]
+            name = meta.get("name", b["id"])
+            imp = meta.get("importance", 5)
+            created_date = meta.get("created", "")[:10]
+            tags = "、".join(meta.get("tags", [])[:3])
+
+            line = f"• [{name}] 重要度:{imp} | {created_date}"
+            if tags:
+                line += f" | {tags}"
+            parts.append(line)
+        parts.append("")
+        parts.append("完成后用 trace(bucket_id, resolved=1) 标记已解决。")
+
+    return "\n".join(parts)
 
 
 # =============================================================
