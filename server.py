@@ -1339,10 +1339,25 @@ async def dawn() -> str:
             created_date = meta.get("created", "")[:10]
             resolved = " ✓" if meta.get("resolved") else ""
 
-            line = f"• [{name}] 主题:{domains} | 重要度:{imp}{resolved} | {created_date}"
+            # --- Extract content snippet (first ~80 chars, break at sentence end) ---
+            raw_content = b.get("content", "")
+            snippet = strip_wikilinks(raw_content)[:80].replace("\n", " ").strip()
+            # Try to break at last natural sentence boundary (at least 40 chars in)
+            for sep in ("。", "！", "？"):
+                last = snippet.rfind(sep)
+                if last >= 40:
+                    snippet = snippet[:last + 1]
+                    break
+            truncated = " …" if len(raw_content) > len(snippet) else ""
+
+            # Format: title line + snippet line
+            title_line = f"• [{name}] 主题:{domains} | 重要度:{imp}{resolved} | {created_date}"
             if tags:
-                line += f" | {tags}"
-            parts.append(line)
+                title_line += f" | {tags}"
+            parts.append(title_line)
+            if snippet:
+                parts.append(f"  「{snippet}{truncated}」")
+        parts.append("（以上内容为原文截取片段，非全文。想了解细节可用 breath 或 dream 查阅。）")
         parts.append("")
 
     # ============================================================
